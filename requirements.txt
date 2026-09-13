@@ -1,0 +1,18 @@
+# Core (notebook + dashboard) — versions used for the results in the repo (Python 3.11)
+numpy==2.4.6
+pandas==2.3.3
+scipy==1.17.1
+scikit-learn==1.9.1
+matplotlib==3.11.2
+xgboost==3.2.0
+shap==0.51.0
+statsmodels==0.15.0
+torch==2.13.0
+streamlit==1.63.0
+plotly==7.0.0
+jupyterlab==4.6.3
+nbconvert==7.17.1
+ipykernel==7.3.0
+
+# Optional: AutoGluon section (RUN_AUTOGLUON = True in the notebook). Heavy (~2 GB).
+# pip install "autogluon.tabular[all]==1.6.1"
