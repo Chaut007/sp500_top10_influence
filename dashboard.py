@@ -382,6 +382,21 @@ def page_search(B):
             continue
         st.subheader(title)
         st.dataframe(t.head(15).style.format(precision=4), width='stretch')
+    if B.get('svr_kernels') is not None:
+        st.subheader('SVR: ทำไมใช้ RBF kernel เดียว — เทียบ kernel อื่นด้วย protocol เดียวกัน')
+        sk = B['svr_kernels'].copy(); sk['best params'] = sk['best params'].astype(str)
+        st.dataframe(sk.style.format({'cv mean R2': '{:.3f}', 'cv min R2': '{:.3f}', 'test R2': '{:.3f}'}), width='stretch')
+        st.dataframe(B['svr_stress'].style.format('{:+.2f}').background_gradient(cmap='RdBu', axis=None, vmin=-16, vmax=16), width='stretch')
+        st.caption('RBF ถูกกำหนดไว้ล่วงหน้า (kernel มาตรฐานที่ bounded) — CV mean ของทุก kernel ต่างกันไม่เกิน ~0.03 (น้อยกว่า std ระหว่าง fold) จึงแยกไม่ออกด้วย CV; '
+                   'ถ้าเลือกจาก CV mean จะได้ poly degree 3 ซึ่งบน test แย่ที่สุด เพราะ polynomial โตไม่จำกัดเมื่อ input สุดขั้ว (ตาราง stress test: ทำนายเมื่อหุ้นทั้ง 10 อันดับขยับ −12/−6/+6/+10% พร้อมกัน) '
+                   'ส่วน sigmoid อิ่มตัว ทำนายน้อยเกิน · คอลัมน์ test ไม่ได้ใช้เลือก แสดงเพื่อความโปร่งใส · ผล test ของ SVR (0.78) จึงขึ้นกับทางเลือก RBF นี้ แต่ข้อสรุปหลักของงานไม่เปลี่ยน')
+
+    if B.get('scale_check') is not None:
+        st.subheader('โมเดลไหนต้อง normalize? — fit แบบ scale vs ไม่ scale (StandardScaler fit บน train ของ fold)')
+        st.dataframe(B['scale_check'].style.format('{:.4f}'), width='stretch')
+        st.caption('Linear และ XGBoost ผลเท่าเดิมเป๊ะ (scale-invariant) · SVR ต้อง scale (ไม่ scale แล้ว R² ตกชัดเจน) · LSTM scale เสมอ (neural net) · '
+                   'Ridge ไวต่อ scale ในทางทฤษฎี แต่เมื่อ scale แล้วเลือก alpha ใหม่ตาม CV ผลใกล้เดิม จึงไม่ scale เพื่อให้ coefficient ตีความได้ตรง · target ไม่ scale (หน่วย %)')
+
     if B.get('ag_leaderboard') is not None:
         st.subheader('AutoGluon leaderboard (final model, tuning_data = 20% ท้ายของ train)')
         st.dataframe(B['ag_leaderboard'][['model', 'score_val', 'fit_time', 'stack_level']].style.format({'score_val': '{:.4f}', 'fit_time': '{:.1f}'}), width='stretch')
@@ -424,6 +439,9 @@ def page_method(B):
         ('การ un-swap เชื่อถือได้แค่ไหน ในเมื่อไม่มี ticker?',
          'ตรวจ 4 ทาง: คู่หุ้นราคาใกล้กัน (GOOGL/GOOG) ได้ correlation 0.976; R² test จาก −1.9 → 0.71; การขยับใหญ่ที่เก็บไว้ตรงกับเหตุการณ์จริงที่ทราบวันที่ (META −19% 26/7/2018, NVDA +24% 25/5/2023, META +20% 2/2/2024, NVDA −17% 27/1/2025); '
          'และตาราง sensitivity: ขยับพารามิเตอร์ทุกตัวแล้วผลระดับรวมแทบไม่เปลี่ยน — กฎ boundary jump >20% ตั้งจากการตรวจ event ปลอม (TSLA/AVGO สลับกันที่อันดับ 10 ปี 2024) กับราคาจริง ไม่ใช่การจูนกับ R² test และแสดงผลเมื่อปิดกฎไว้ด้วย'),
+        ('โมเดลไหนต้อง normalize และทำแล้วหรือยัง?',
+         'SVR และ LSTM ต้อง (distance-based / neural net) — ทำแล้วด้วย StandardScaler ที่ fit บน train ของแต่ละ fold เท่านั้น; Linear และ XGBoost/AutoGluon ไม่จำเป็น (ผลเท่าเดิมเป๊ะ — ตารางในหน้า Hyperparameter search พิสูจน์ด้วยการรันทั้งสองแบบ); '
+         'Ridge ไวต่อ scale ในทางทฤษฎีแต่ feature อยู่ในหน่วย % เดียวกัน (std 1.8–2.5) และเมื่อ scale แล้วเลือก alpha ใหม่ตาม CV ผลใกล้เดิม จึงไม่ scale เพื่อให้ coefficient ตีความได้ตรง; target ไม่ scale (หน่วย %)'),
         ('Hyperparameter ถูกเลือกโดยเห็น test ไหม?',
          'ไม่ — ทุก search ใช้ค่าเฉลี่ย R² ของ 4 val fold เท่านั้น แล้ว fit ใหม่บน train ทั้งหมด วัด test ครั้งเดียว; LSTM early stopping และ AutoGluon tuning ใช้ส่วนท้ายของ train (อดีต); scaler fit ต่อ fold'),
         ('ค่า val ราย fold optimistic ไหม?',
@@ -442,6 +460,10 @@ def page_method(B):
          'เป็นการออกแบบตามแผนงาน (train 80% / test 20%, expanding window); 365 วันซื้อขาย ≈ 1 ปี 5 เดือน; ผลรายปีมีในหน้า *อิทธิพลตามเวลา* ให้ดูประกอบ'),
         ('ข้อมูล adj close มีผลไหม?',
          'adj close ปรับปันผลย้อนหลัง ทำให้ระดับไม่ตรงราคาซื้อขายจริง แต่ return รายวันต่างเฉพาะวัน ex-dividend (~0.5% ต่อไตรมาส) ผลน้อยมาก; target (S&P 500) เป็น close จริง ตรวจกับค่าที่ทราบแล้ว (เช่น 23/3/2020 = 2,237.40)'),
+        ('ทำไม SVR ใช้ kernel เดียว (RBF)?',
+         'RBF ถูกกำหนดไว้ล่วงหน้าเพราะเป็น kernel มาตรฐานที่ bounded (ค่าทำนายไม่โตไม่จำกัดเมื่อ input สุดขั้ว) — หน้า Hyperparameter search เทียบ linear / poly / sigmoid ด้วย protocol เดียวกัน: '
+         'CV mean ต่างกันไม่เกิน ~0.03 (แยกไม่ออกด้วย CV) ถ้าเลือกจาก CV mean จะได้ poly degree 3 ซึ่งบน test แย่ที่สุด (~0.65) เพราะ extrapolate เกินจริง (stress test) '
+         'ดังนั้นยอมรับว่าเป็นทางเลือกล่วงหน้า ผล test ของ SVR ขึ้นกับทางเลือกนี้ แต่ข้อสรุปหลักของงานไม่เปลี่ยนไม่ว่าใช้ kernel ใด'),
         ('ผลนี้ generalize ไปอนาคตได้ไหม?',
          'test เป็นช่วงเดียว (2024–25) และ sensitivity ขึ้นกับ regime จึงควรรายงานเป็น "ช่วง 2016–2025" และ re-fit เมื่อมีข้อมูลใหม่ ไม่ควรอ้างเป็นค่าคงที่'),
     ]
