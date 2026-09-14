@@ -300,6 +300,10 @@ def page_data(B):
     c[2].metric('วันที่มีหุ้นเข้า/ออก top 10', f"{meta['entry_exit_days']:,}")
     c[3].metric('corr(EW top-10, S&P)', f"{chk['corr_EW_SP']:.3f}")
     c[4].metric('corr คู่ราคาใกล้กัน (GOOGL/GOOG)', f"{chk['twin_corr']:.3f}", help=f"{chk['twin_pairs']} pair-days ที่ราคาต่างกัน <1% สองวันติด — ถ้าจับคู่ผิด ค่านี้จะต่ำ")
+    if B.get('reference_row') is not None:
+        rr = B['reference_row']
+        st.caption(f"แถวแรกของข้อมูล (4/1/2016) มี return ด้วย โดยใช้แถวอ้างอิง {rr['date']} จาก Yahoo Finance (adj close ของ GOOGL, GOOG, MSFT, AAPL, AMZN, XOM, BRK-B, META, JNJ, VZ "
+                   f"ตามช่อง 1–10 และ S&P 500 = {rr['target']:,.2f}) — ใช้คำนวณ return ของแถวแรกเท่านั้น ไม่นับเป็นข้อมูล ทำให้ train มี 551 / 2,011 แถวตรงตามแผน")
 
     st.subheader('ทำไมต้อง un-swap — Linear regression เดียวกัน ก่อน/หลัง')
     a, b = st.columns([1, 2])

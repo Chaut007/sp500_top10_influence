@@ -10,6 +10,7 @@ data_prep.py — เตรียมข้อมูลกลางสำหรั
         - market proxy = median ของ return 10 ช่อง (ไม่ใช้ target -> ไม่ leak)
         - หุ้นเข้า/ออก top 10: |log return| > 35%; หรือที่อันดับ 9-10 idiosyncratic move > 20%; หรือ 8-20% ที่มีหลักฐาน
           (ตัวที่เข้ามาตรงกับหุ้นที่เพิ่งออกไป / หุ้นที่ออกไปกลับมาเร็วๆ นี้)  -> NaN -> เติมด้วยค่าเฉลี่ยของช่องอื่นวันนั้น
+        - แถวแรก (4/1/2016) มี return ด้วย โดยใช้แถวอ้างอิง 31/12/2015 จาก Yahoo Finance (REF_ROW)
   3. สร้าง split ตามที่ตกลง:
         train 2,011 แถว (แถว 1-2,011) / test 503 แถว (แถว 2,012-2,514)
         expanding window 4 fold ใน train:
@@ -39,6 +40,13 @@ import pandas as pd
 from scipy.optimize import linear_sum_assignment
 
 CSV_PATH = Path(__file__).with_name("modelling_table(new).csv")
+
+# แถวอ้างอิง 31/12/2015 (วันซื้อขายก่อนแถวแรกของไฟล์) จาก Yahoo Finance (yfinance auto_adjust=True, ดึง 14/9/2026)
+# = adj close ของ GOOGL, GOOG, MSFT, AAPL, AMZN, XOM, BRK-B, META, JNJ, VZ ตามลำดับช่อง 1-10 ของวันที่ 4/1/2016 และ ^GSPC
+# ใช้เพื่อคำนวณ return ของแถวแรกเท่านั้น (ไม่นับเป็นข้อมูล) — ตรวจแล้วว่าฐานการปรับราคาตรงกับไฟล์ (adj close 4/1/2016 ตรงกันที่ 1e-7)
+REF_ROW = {"date": "2015-12-31", "close_1": 38.53383255, "close_2": 37.58797455, "close_3": 48.27262497, "close_4": 23.66843796,
+           "close_5": 33.79449844, "close_6": 49.31230927, "close_7": 132.03999329, "close_8": 103.74891663, "close_9": 76.63905334,
+           "close_10": 26.11704063, "target": 2043.939941}
 
 SLOT_COLS = [f"close_{k}" for k in range(1, 11)]
 RET_COLS = [f"r_{k}" for k in range(1, 11)]
@@ -163,8 +171,10 @@ def build_dataset(path: Path | str = CSV_PATH, impute: str | None = "cross_mean"
     percent: True = return ทุกคอลัมน์อยู่ในหน่วย % (เหมือน notebook)
     """
     prices = load_prices(path)
-    rets, diag, _ = unswap_returns(prices)
-    df = rets.copy()
+    ref = pd.DataFrame([REF_ROW]); ref["date"] = pd.to_datetime(ref["date"]); ref = ref.set_index("date")
+    prices_ext = pd.concat([ref, prices])                # แถวอ้างอิง + ข้อมูล
+    rets, diag, _ = unswap_returns(prices_ext)
+    df = rets.iloc[1:].copy()                            # ตัดแถวอ้างอิงออก -> ทุกแถวมี return
 
     if impute == "cross_mean":
         row_mean = df[RET_COLS].mean(axis=1)
@@ -175,7 +185,7 @@ def build_dataset(path: Path | str = CSV_PATH, impute: str | None = "cross_mean"
     elif impute is not None:
         raise ValueError(f"impute ไม่รู้จัก: {impute}")
 
-    df[TARGET_RET] = prices["target"].pct_change()
+    df[TARGET_RET] = prices_ext["target"].pct_change().iloc[1:]
     if percent:
         df[RET_COLS + [TARGET_RET]] *= 100
     df["target_level"] = prices["target"]

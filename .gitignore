@@ -15,3 +15,6 @@ linear_coefficients.csv
 returns_table.csv
 unswap_diagnostics.csv
 yearly_influence.csv
+
+# review of an external notebook (not part of this project)
+reviews/

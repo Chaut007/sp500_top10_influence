@@ -9,7 +9,7 @@
 
 | Model | R² | MAE (จุด) | MSE (จุด²) | RMSE (จุด) | MAPE (%) |
 |---|---|---|---|---|---|
-| AutoGluon | 0.825 | 18.4 | 582 | 24.1 | 0.317 |
+| AutoGluon | 0.830 | 17.9 | 559 | 23.7 | 0.308 |
 | XGBoost | 0.813 | 19.3 | 638 | 25.3 | 0.332 |
 | SVR | 0.780 | 20.0 | 711 | 26.7 | 0.346 |
 | Ridge | 0.748 | 22.1 | 847 | 29.1 | 0.383 |
@@ -33,7 +33,7 @@ R² คำนวณบน return รายวัน; MAE/MSE/RMSE/MAPE คำน
 | `dashboard.py` | Streamlit dashboard 7 หน้า อ่านผลจาก `dashboard_data.pkl` |
 | `dashboard_data.pkl` | ผลลัพธ์ทั้งหมดที่ notebook export (metrics, predictions, importance, diagnostics ฯลฯ) |
 | `data_prep.py` | โมดูลเวอร์ชันของ section 3–4 (un-swap + split) สำหรับใช้ในสคริปต์ |
-| `modelling_table(new).csv` | ข้อมูลต้นทาง: `close_1..close_10` = adj close ของหุ้นอันดับ 1–10 *ในวันนั้น* (ช่องอันดับ ไม่ใช่หุ้นตัวเดิม), `target` = S&P 500 |
+| `modelling_table(new).csv` | ข้อมูลต้นทาง: `close_1..close_10` = adj close ของหุ้นอันดับ 1–10 *ในวันนั้น* (ช่องอันดับ ไม่ใช่หุ้นตัวเดิม), `target` = S&P 500 — แถวแรก (4/1/2016) คำนวณ return ได้ด้วยแถวอ้างอิง 31/12/2015 จาก Yahoo Finance ที่ฝังไว้ใน notebook/`data_prep.py` (`REF_ROW`) |
 | `results_summary.csv` | ตาราง metric ทุกโมเดล ทุก split (export จาก `dashboard_data.pkl`) |
 
 ## วิธีรัน
