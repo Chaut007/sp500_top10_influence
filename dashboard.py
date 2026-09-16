@@ -64,6 +64,43 @@ def calc_metrics(y, p, prev_level, level):
             'MAPE_%': float(np.mean(np.abs((pred_level - level) / level)) * 100)}
 
 
+def csv_bytes(df: pd.DataFrame, index=True) -> bytes:
+    return df.to_csv(index=index, float_format='%.6f').encode('utf-8-sig')      # BOM ให้ Excel เปิดภาษาไทย/ตัวเลขถูก
+
+
+def build_datasets(B):
+    '''train/test dataset ตามที่โมเดลใช้จริง (return %, un-swapped) + คอลัมน์ cv_role'''
+    df = B['returns']; ret_cols = [f'r_{k}' for k in range(1, 11)]
+    role = np.array(['always train (rows 1-551)'] * len(df), dtype=object)
+    for name, (a, b) in zip(['fold1 val', 'fold2 val', 'fold3 val', 'fold4 val'], [(551, 916), (916, 1281), (1281, 1646), (1646, 2011)]):
+        role[a:b] = name
+    role[2011:] = 'test'
+    out = df[ret_cols + ['r_target', 'target_level']].copy(); out.insert(0, 'cv_role', role)
+    return out.iloc[:2011], out.iloc[2011:]
+
+
+def download_section(B, key='dl'):
+    st.subheader('ดาวน์โหลดข้อมูลและผลลัพธ์ (CSV)')
+    train, test = build_datasets(B)
+    res = B['results'].copy(); res['split'] = pd.Categorical(res['split'], SPLITS); res = res.sort_values(['model', 'split'])
+    pred = B['predictions'].sort_values(['model', 'split', 'date'])
+    items = [
+        ('train_dataset.csv', 'Train set (2,011 แถว: feature r_1..r_10 + r_target %, cv_role)', csv_bytes(train)),
+        ('test_dataset.csv', 'Test set (503 แถว)', csv_bytes(test)),
+        ('results_summary.csv', 'Metric ทุกโมเดล ทุก split (R², MAE, MSE, RMSE, MAPE)', csv_bytes(res, index=False)),
+        ('predictions.csv', 'ค่าทำนายรายวันของทุกโมเดล ทุก split (y_true, y_pred)', csv_bytes(pred, index=False)),
+        ('returns_table.csv', 'ตาราง return หลัง un-swap ทั้ง 2,514 วัน + swapped / n_unmatched', csv_bytes(B['returns'])),
+        ('unswap_diagnostics.csv', 'Event หุ้นเข้า/ออกและการขยับใหญ่ พร้อมเหตุผล', csv_bytes(B['diag'])),
+        ('feature_importance.csv', 'Permutation importance บน test ทุกโมเดล', csv_bytes(B['importance'])),
+        ('yearly_influence.csv', 'R² / beta / coefficient รายปี', csv_bytes(B['yearly'])),
+    ]
+    cols = st.columns(4)
+    for i, (fname, desc, data) in enumerate(items):
+        with cols[i % 4]:
+            st.download_button(f'⬇ {fname}', data=data, file_name=fname, mime='text/csv', help=desc, key=f'{key}_{fname}', width='stretch')
+            st.caption(desc)
+
+
 def fmt_table(df: pd.DataFrame, cols=None):
     cols = cols or [c for c in METRIC_COLS if c in df.columns]
     fmt = {c: METRIC_FMT[c] for c in cols}
@@ -139,6 +176,8 @@ def page_overview(B):
             f"แต่แค่ {yearly['beta_EW'].min():.2f}% ในปี {yearly['beta_EW'].idxmin()} — mega-cap ขยับด้วยเรื่องตัวเองมากขึ้น ตลาดตามน้อยลง")
     k3.info('**Importance กระจุกที่อันดับ 7–10 ไม่ใช่ 1–3** — เพราะอันดับ 1–5 correlate กันสูงจึงแชร์เครดิต และอันดับ 7–10 เป็น proxy '
             'ของหุ้นอีก 490 ตัว (ดูหน้า Feature importance) — ไม่ใช่น้ำหนัก market cap')
+    st.markdown('---')
+    download_section(B, key='ov')
 
 
 def page_compare(B):
@@ -336,6 +375,15 @@ def page_data(B):
                    'rank penalty จำเป็นต่อความถูกต้องรายช่อง (twin corr) · กฎ boundary jump >20% มีผลต่อ R² test เพราะ event ปลอมจากการสลับ TSLA/AVGO เกือบทั้งหมดอยู่ในปี 2024 — '
                    'เกณฑ์ตั้งจากการตรวจ event กับราคาจริงของหุ้น (data cleaning) และแสดงผลเมื่อใช้เกณฑ์อื่น/ปิดกฎไว้ตรงนี้เพื่อความโปร่งใส')
 
+    st.subheader('Dataset ที่โมเดลใช้จริง (หลัง un-swap, หน่วย %)')
+    train, test = build_datasets(B)
+    which = st.radio('ชุด', ['train (2,011 แถว)', 'test (503 แถว)'], horizontal=True, label_visibility='collapsed')
+    show = train if which.startswith('train') else test
+    st.dataframe(show.style.format({c: '{:.3f}' for c in show.columns if c.startswith('r_')} | {'target_level': '{:.2f}'}), width='stretch', height=320)
+    st.caption('feature = r_1..r_10 (return รายวันของอันดับ 1–10) · target = r_target (return รายวันของ S&P 500 วันเดียวกัน) · target_level ไว้แปลง error เป็นจุด · '
+               'cv_role = แถวนี้เป็น validation ของ fold ไหน (แถว 1–551 เป็น train ทุก fold)')
+    download_section(B, key='data')
+
     st.subheader('หุ้นเข้า/ออก top 10 ที่ตัดสินด้วยหลักฐาน (ไม่ใช่เกณฑ์ 35%)')
     dfmt = {'prev_value': '{:.2f}', 'new_value': '{:.2f}', 'pct_move': '{:+.1f}', 'top10_median_%': '{:+.2f}'}
     diag = diag.copy(); diag.index = pd.to_datetime(diag.index).strftime('%Y-%m-%d')
@@ -379,7 +427,7 @@ def page_data(B):
 def page_search(B):
     st.title('Hyperparameter search (คะแนน = ค่าเฉลี่ย R² ของ 4 fold)')
     st.json(B['best_params'], expanded=False)
-    names = {'xgboost': 'XGBoost — random search 40 configs', 'svr': 'SVR — grid 100 configs', 'lstm': 'LSTM — window × hidden', 'ridge': 'Ridge — alpha'}
+    names = {'xgboost': 'XGBoost — random search 40 configs', 'svr': 'SVR — grid scaler × C × epsilon × gamma (384 configs)', 'lstm': 'LSTM — window × hidden × scaler', 'ridge': 'Ridge — scaler × alpha'}
     for key, title in names.items():
         t = B['search'].get(key)
         if t is None:
@@ -391,15 +439,19 @@ def page_search(B):
         sk = B['svr_kernels'].copy(); sk['best params'] = sk['best params'].astype(str)
         st.dataframe(sk.style.format({'cv mean R2': '{:.3f}', 'cv min R2': '{:.3f}', 'test R2': '{:.3f}'}), width='stretch')
         st.dataframe(B['svr_stress'].style.format('{:+.2f}').background_gradient(cmap='RdBu', axis=None, vmin=-16, vmax=16), width='stretch')
-        st.caption('RBF ถูกกำหนดไว้ล่วงหน้า (kernel มาตรฐานที่ bounded) — CV mean ของทุก kernel ต่างกันไม่เกิน ~0.03 (น้อยกว่า std ระหว่าง fold) จึงแยกไม่ออกด้วย CV; '
-                   'ถ้าเลือกจาก CV mean จะได้ poly degree 3 ซึ่งบน test แย่ที่สุด เพราะ polynomial โตไม่จำกัดเมื่อ input สุดขั้ว (ตาราง stress test: ทำนายเมื่อหุ้นทั้ง 10 อันดับขยับ −12/−6/+6/+10% พร้อมกัน) '
-                   'ส่วน sigmoid อิ่มตัว ทำนายน้อยเกิน · คอลัมน์ test ไม่ได้ใช้เลือก แสดงเพื่อความโปร่งใส · ผล test ของ SVR (0.78) จึงขึ้นกับทางเลือก RBF นี้ แต่ข้อสรุปหลักของงานไม่เปลี่ยน')
+        sk_cv, sk_te = B['svr_kernels']['cv mean R2'], B['svr_kernels']['test R2']
+        st.caption(f'RBF ถูกกำหนดไว้ล่วงหน้า (kernel มาตรฐานที่ bounded) — ทุก kernel ใช้ scaler เดียวกับที่ CV เลือกให้ RBF ({B["best_params"]["svr"].get("scaler", "standard")}) · '
+                   f'CV mean ของทุก kernel ต่างกันแค่ {sk_cv.max() - sk_cv.min():.3f} จึงแยกไม่ออกด้วย CV (kernel ที่ CV สูงสุด: {sk_cv.idxmax()}) · '
+                   f'บน test อยู่ในช่วง {sk_te.min():.3f}–{sk_te.max():.3f} ซึ่งแคบกว่า CI ของ R² test (หน้า *ผลลัพธ์*) มาก · '
+                   'ตาราง stress test = ค่าทำนายเมื่อหุ้นทั้ง 10 อันดับขยับ −12/−6/+6/+10% พร้อมกัน — เมื่อ input ถูกบีบลง [0,1] ด้วย min-max ไม่มี kernel ไหนระเบิด · '
+                   'γ ที่ CV เลือกให้ RBF เล็กมาก (0.0005 บน input [0,1]) kernel จึงทำงานในโหมดเกือบเชิงเส้น (CV เท่ากับ linear kernel) · คอลัมน์ test ไม่ได้ใช้เลือก แสดงเพื่อความโปร่งใส')
 
     if B.get('scale_check') is not None:
-        st.subheader('โมเดลไหนต้อง normalize? — fit แบบ scale vs ไม่ scale (StandardScaler fit บน train ของ fold)')
-        st.dataframe(B['scale_check'].style.format('{:.4f}'), width='stretch')
-        st.caption('Linear และ XGBoost ผลเท่าเดิมเป๊ะ (scale-invariant) · SVR ต้อง scale (ไม่ scale แล้ว R² ตกชัดเจน) · LSTM scale เสมอ (neural net) · '
-                   'Ridge ไวต่อ scale ในทางทฤษฎี แต่เมื่อ scale แล้วเลือก alpha ใหม่ตาม CV ผลใกล้เดิม จึงไม่ scale เพื่อให้ coefficient ตีความได้ตรง · target ไม่ scale (หน่วย %)')
+        st.subheader('โมเดลไหนต้อง normalize และแบบไหน? — none / z-score / min-max (scaler fit บน train ของ fold)')
+        st.dataframe(B['scale_check'].style.format({'cv mean R2': '{:.4f}', 'test R2': '{:.4f}'}), width='stretch')
+        st.caption('Linear และ XGBoost ผลเท่าเดิมทุกแบบ (scale-invariant) · SVR และ LSTM ต้อง scale และ CV เลือก min-max (x−min)/(max−min): return มีหางหนา (−21% ถึง +24%) '
+                   'z-score ทำให้วันสุดขั้วมี |z| 5–10 ซึ่งทำให้ระยะทางใน RBF kernel ระเบิดและ gate ของ LSTM อิ่มตัว ส่วน min-max บีบทุกค่าลง [0,1] · '
+                   'Ridge ไวต่อ scale (penalty ขึ้นกับหน่วย) จึงให้ CV เลือกทั้ง alpha และ scaler แล้วแปลง coefficient กลับเป็นหน่วยเดิม · target ไม่ scale (หน่วย %)')
 
     if B.get('ag_leaderboard') is not None:
         st.subheader('AutoGluon leaderboard (final model, tuning_data = 20% ท้ายของ train)')
@@ -415,15 +467,15 @@ def page_method(B):
 2. **Un-swap** — คอลัมน์เป็นช่องอันดับ ต้องจับคู่ราคาวัน t กับ t−1 ให้เป็นบริษัทเดิมก่อนคำนวณ return: Hungarian assignment + penalty การเลื่อนอันดับ + market proxy (median ของ 10 ช่อง) + กฎหุ้นเข้า/ออกเฉพาะอันดับ 9–10 ที่ต้องมีหลักฐาน; ช่องที่เปลี่ยนตัวเติมด้วยค่าเฉลี่ยของช่องอื่น
 3. **Same-day** — return ของอันดับ 1–10 วัน t อธิบาย return ดัชนีวัน t (วัดอิทธิพล ไม่ใช่ทำนายอนาคต)
 4. **Split** — train 2,011 วัน / test 503 วัน (12/2023–12/2025); expanding-window CV 4 fold × 365 วันใน train; scaler fit ต่อ fold; เลือก hyperparameter จาก CV เท่านั้น; test วัดครั้งเดียว
-5. **โมเดล** — Linear, Ridge, XGBoost (random search), SVR (grid), LSTM (PyTorch, early stopping บน inner holdout), AutoGluon (tuning_data = 20% ท้ายของ train)
+5. **โมเดล** — Linear, Ridge, XGBoost (random search), SVR (grid), LSTM (PyTorch, early stopping บน inner holdout), AutoGluon (tuning_data = 20% ท้ายของ train); สำหรับ SVR / LSTM / Ridge ชนิด scaler (z-score vs min-max) เป็น hyperparameter ที่เลือกจาก CV
 6. **Metric** — R² คำนวณบน return รายวัน; MAE, MSE, RMSE (หน่วยจุดดัชนี) และ MAPE (%) คำนวณบนระดับดัชนี (ระดับที่ทำนาย = ระดับเมื่อวาน × (1 + return ที่ทำนาย)) — MAPE ไม่คำนวณบน return เพราะหารด้วยค่าจริงที่ใกล้ 0 จะได้ตัวเลขหลายร้อย % ที่ไม่สื่ออะไร (ดูคำอธิบายในหน้าภาพรวม)
 
 ### ข้อสรุป
-- **Top 10 อธิบาย return รายวันของ S&P ได้ ~80%** — CV 0.78–0.80 ทุกโมเดล tabular; test AutoGluon/XGBoost 0.81–0.83; สูงสุดในปีวิกฤต (2018/2020/2022 = 0.89–0.93)
+- **Top 10 อธิบาย return รายวันของ S&P ได้ ~80%** — CV 0.78–0.83 ทุกโมเดล; test AutoGluon/XGBoost 0.81–0.83; สูงสุดในปีวิกฤต (2018/2020/2022 = 0.89–0.93)
 - **Sensitivity ขึ้นกับ regime** — ดัชนีขยับ ~0.7–0.9% ต่อ 1% ของ top 10 ในปีผันผวน แต่ ~0.5% ในปี 2023–24 (ต่ำสุดในรอบ 10 ปี): mega-cap ขยับด้วยเรื่องตัวเองมากขึ้น ตลาดตามน้อยลง
 - **Importance กระจุกที่อันดับ 7–10** — ผลของ collinearity ในกลุ่มเทค + อันดับ 7–10 เป็น proxy ของหุ้นอีก 490 ตัว ไม่ใช่น้ำหนัก market cap
-- **Linear vs non-linear** — ใน CV ใกล้กัน; บน test tree/ensemble นำ ~0.1 เพราะจับ non-linearity ได้ (SHAP dependence รูป S: การขยับเกิน ±4% ของหุ้นตัวเดียวส่งผลต่อดัชนีน้อยกว่าสัดส่วนเชิงเส้น) และความต่างนี้มีนัยสำคัญ (AutoGluon/XGBoost: ΔR² 95% CI ไม่คร่อม 0, Diebold–Mariano p < 0.001; SVR ก้ำกึ่ง; LSTM ไม่ต่าง) แต่ใน fold COVID Linear กลับดีที่สุดเพราะ extrapolate ได้
-- **LSTM ≈ Linear** — return รายวันแทบไม่มี autocorrelation ประวัติย้อนหลังไม่ช่วย
+- **Linear vs non-linear** — ใน CV ใกล้กัน; บน test tree/ensemble นำ ~0.1 เพราะจับ non-linearity ได้ (SHAP dependence รูป S: การขยับเกิน ±4% ของหุ้นตัวเดียวส่งผลต่อดัชนีน้อยกว่าสัดส่วนเชิงเส้น) และความต่างนี้มีนัยสำคัญ (AutoGluon/XGBoost/SVR/Ridge: ΔR² 95% CI ไม่คร่อม 0, Diebold–Mariano p < 0.001; LSTM ไม่ต่าง) แต่ใน fold COVID Linear กลับดีที่สุดเพราะ extrapolate ได้
+- **LSTM ≈ Linear** — CV เท่ากัน (0.778 vs 0.782) test ต่างกันอย่างไม่มีนัยสำคัญ: return รายวันแทบไม่มี autocorrelation ประวัติย้อนหลังไม่ช่วย
 
 ### ข้อจำกัด
 - ไม่มี ticker → ตีความได้ระดับอันดับ; การจับคู่เป็นการอนุมาน (ตรวจสอบแล้วด้วยคู่ราคาใกล้กัน, R² ก่อน/หลัง และ sensitivity ของพารามิเตอร์)
@@ -443,9 +495,10 @@ def page_method(B):
         ('การ un-swap เชื่อถือได้แค่ไหน ในเมื่อไม่มี ticker?',
          'ตรวจ 4 ทาง: คู่หุ้นราคาใกล้กัน (GOOGL/GOOG) ได้ correlation 0.976; R² test จาก −1.9 → 0.71; การขยับใหญ่ที่เก็บไว้ตรงกับเหตุการณ์จริงที่ทราบวันที่ (META −19% 26/7/2018, NVDA +24% 25/5/2023, META +20% 2/2/2024, NVDA −17% 27/1/2025); '
          'และตาราง sensitivity: ขยับพารามิเตอร์ทุกตัวแล้วผลระดับรวมแทบไม่เปลี่ยน — กฎ boundary jump >20% ตั้งจากการตรวจ event ปลอม (TSLA/AVGO สลับกันที่อันดับ 10 ปี 2024) กับราคาจริง ไม่ใช่การจูนกับ R² test และแสดงผลเมื่อปิดกฎไว้ด้วย'),
-        ('โมเดลไหนต้อง normalize และทำแล้วหรือยัง?',
-         'SVR และ LSTM ต้อง (distance-based / neural net) — ทำแล้วด้วย StandardScaler ที่ fit บน train ของแต่ละ fold เท่านั้น; Linear และ XGBoost/AutoGluon ไม่จำเป็น (ผลเท่าเดิมเป๊ะ — ตารางในหน้า Hyperparameter search พิสูจน์ด้วยการรันทั้งสองแบบ); '
-         'Ridge ไวต่อ scale ในทางทฤษฎีแต่ feature อยู่ในหน่วย % เดียวกัน (std 1.8–2.5) และเมื่อ scale แล้วเลือก alpha ใหม่ตาม CV ผลใกล้เดิม จึงไม่ scale เพื่อให้ coefficient ตีความได้ตรง; target ไม่ scale (หน่วย %)'),
+        ('โมเดลไหนต้อง normalize ใช้สูตรอะไร และทำไม?',
+         'SVR และ LSTM ต้อง (distance-based / neural net) — ชนิด scaler เป็น hyperparameter ที่เลือกจาก CV ระหว่าง z-score (x−μ)/σ กับ min-max (x−min)/(max−min) โดย fit บน train ของแต่ละ fold เท่านั้น: '
+         'CV เลือก min-max ให้ทั้งคู่ เพราะ return มีหางหนา (−21% ถึง +24%) z-score ทำให้วันสุดขั้วมี |z| 5–10 ซึ่งทำให้ระยะทางใน RBF kernel ระเบิดและ gate ของ LSTM อิ่มตัว ส่วน min-max บีบทุกค่าลง [0,1] '
+         '(ตารางในหน้า Hyperparameter search เทียบ none / z-score / min-max); Linear และ XGBoost/AutoGluon ไม่ต้อง (ผลเท่าเดิมทุกแบบ); Ridge ไวต่อ scale จึงให้ CV เลือกทั้ง alpha และ scaler แล้วแปลง coefficient กลับเป็นหน่วยเดิม; target ไม่ scale (หน่วย %)'),
         ('Hyperparameter ถูกเลือกโดยเห็น test ไหม?',
          'ไม่ — ทุก search ใช้ค่าเฉลี่ย R² ของ 4 val fold เท่านั้น แล้ว fit ใหม่บน train ทั้งหมด วัด test ครั้งเดียว; LSTM early stopping และ AutoGluon tuning ใช้ส่วนท้ายของ train (อดีต); scaler fit ต่อ fold'),
         ('ค่า val ราย fold optimistic ไหม?',
@@ -455,9 +508,11 @@ def page_method(B):
         ('ทำไม importance ไม่เรียงตาม market cap?',
          'อันดับ 1–5 correlate กันสูง (VIF 3–4, corr กับกลุ่ม 0.74–0.81) จึงแชร์เครดิต ส่วนอันดับ 7–10 เป็น proxy ของหุ้นอีก 490 ตัว — เช็คแล้วว่าไม่ได้เกิดจากการ impute (หน้า *Feature importance*)'),
         ('Linear ชนะทุกโมเดลใน fold COVID ได้อย่างไร?',
-         'วันที่ตลาด ±10% เกินช่วงที่ train เคยเห็น tree/kernel/LSTM ให้ค่าทำนายแบน (extrapolate ไม่ได้) แต่ linear extrapolate ได้ตามโครงสร้างดัชนีที่เป็นผลรวมถ่วงน้ำหนัก'),
-        ('LSTM ทำไมแย่กว่า Linear?',
-         'return รายวันแทบไม่มี autocorrelation (corr ของ EW top 10 เมื่อวานกับดัชนีวันนี้ ≈ −0.13) ประวัติย้อนหลังจึงไม่เพิ่มข้อมูล แต่เพิ่มพารามิเตอร์และความแปรปรวน; early stopping หยุดเร็ว'),
+         'วันที่ตลาด ±10% เกินช่วงที่ train เคยเห็น tree/LSTM ให้ค่าทำนายแบน (extrapolate ไม่ได้: XGBoost 0.73, LSTM 0.69, AutoGluon 0.68) แต่ linear extrapolate ได้ตามโครงสร้างดัชนีที่เป็นผลรวมถ่วงน้ำหนัก (0.84) '
+         'และ SVR ที่ CV เลือก γ เล็กจน kernel เกือบเชิงเส้นก็ตามมาติดๆ (0.82) เช่นเดียวกับ Ridge (0.80)'),
+        ('LSTM ทำไมไม่ดีกว่า Linear ทั้งที่ซับซ้อนกว่า?',
+         'return รายวันแทบไม่มี autocorrelation (corr ของ EW top 10 เมื่อวานกับดัชนีวันนี้ ≈ −0.13) ประวัติย้อนหลังจึงไม่เพิ่มข้อมูล แต่เพิ่มพารามิเตอร์และความแปรปรวน — CV เท่ากับ Linear (0.778 vs 0.782) '
+         'และบน test สูงกว่า (0.769 vs 0.707) แต่ไม่มีนัยสำคัญ (block bootstrap: CI ของ ΔR² คร่อม 0, DM p = 0.16); early stopping หยุดเร็ว (~14 epoch)'),
         ('MAPE ทำไมคำนวณบนระดับดัชนี?',
          'สูตร MAPE หารด้วยค่าจริง ซึ่ง return รายวันใกล้ 0 บ่อยมาก (12% ของวัน |return| < 0.1%) ทำให้ได้ตัวเลขหลายร้อย % ที่ไม่สื่ออะไร จึงแปลง return ที่ทำนายเป็นระดับดัชนีก่อนตามธรรมเนียมงานทำนายราคา — MAPE ระดับดัชนี ≈ MAE ของ return'),
         ('Split 4 fold × 365 วันซื้อขาย ทำไมไม่แบ่งตามปี?',
@@ -465,9 +520,9 @@ def page_method(B):
         ('ข้อมูล adj close มีผลไหม?',
          'adj close ปรับปันผลย้อนหลัง ทำให้ระดับไม่ตรงราคาซื้อขายจริง แต่ return รายวันต่างเฉพาะวัน ex-dividend (~0.5% ต่อไตรมาส) ผลน้อยมาก; target (S&P 500) เป็น close จริง ตรวจกับค่าที่ทราบแล้ว (เช่น 23/3/2020 = 2,237.40)'),
         ('ทำไม SVR ใช้ kernel เดียว (RBF)?',
-         'RBF ถูกกำหนดไว้ล่วงหน้าเพราะเป็น kernel มาตรฐานที่ bounded (ค่าทำนายไม่โตไม่จำกัดเมื่อ input สุดขั้ว) — หน้า Hyperparameter search เทียบ linear / poly / sigmoid ด้วย protocol เดียวกัน: '
-         'CV mean ต่างกันไม่เกิน ~0.03 (แยกไม่ออกด้วย CV) ถ้าเลือกจาก CV mean จะได้ poly degree 3 ซึ่งบน test แย่ที่สุด (~0.65) เพราะ extrapolate เกินจริง (stress test) '
-         'ดังนั้นยอมรับว่าเป็นทางเลือกล่วงหน้า ผล test ของ SVR ขึ้นกับทางเลือกนี้ แต่ข้อสรุปหลักของงานไม่เปลี่ยนไม่ว่าใช้ kernel ใด'),
+         'RBF ถูกกำหนดไว้ล่วงหน้าเพราะเป็น kernel มาตรฐานที่ bounded (ค่าทำนายไม่โตไม่จำกัดเมื่อ input สุดขั้ว) — หน้า Hyperparameter search เทียบ linear / poly / sigmoid ด้วย protocol เดียวกัน (min-max ตามที่ CV เลือกให้ RBF): '
+         'CV mean ต่างกันไม่เกิน 0.004 (แยกไม่ออกด้วย CV; linear และ RBF เท่ากันที่ 0.830 เพราะ γ = 0.0005 บน input [0,1] เล็กมาก RBF จึงเกือบเชิงเส้น) บน test อยู่ในช่วง 0.78–0.81 แคบกว่า CI ของ R² มาก และ stress test ไม่มี kernel ไหนระเบิด '
+         'ดังนั้น (1) ยอมรับว่า RBF เป็นทางเลือกล่วงหน้า (2) ถ้า search kernel ด้วย CV ก็ได้ RBF/linear เท่ากัน (3) ผลและข้อสรุปหลักไม่ขึ้นกับ kernel'),
         ('ผลนี้ generalize ไปอนาคตได้ไหม?',
          'test เป็นช่วงเดียว (2024–25) และ sensitivity ขึ้นกับ regime จึงควรรายงานเป็น "ช่วง 2016–2025" และ re-fit เมื่อมีข้อมูลใหม่ ไม่ควรอ้างเป็นค่าคงที่'),
     ]

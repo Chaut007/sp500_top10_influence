@@ -210,11 +210,12 @@ def get_xy(df: pd.DataFrame, idx: np.ndarray, features: list[str] = RET_COLS, ta
     return sub[features], sub[target]
 
 
-def scale_fold(X_train: pd.DataFrame, *others: pd.DataFrame):
-    """StandardScaler fit บน train ของ fold เท่านั้น แล้ว transform ชุดอื่น — ใช้กับ SVR/LSTM"""
-    from sklearn.preprocessing import StandardScaler
+def scale_fold(X_train: pd.DataFrame, *others: pd.DataFrame, kind: str = "minmax"):
+    """scaler fit บน train ของ fold เท่านั้น แล้ว transform ชุดอื่น — ใช้กับ SVR/LSTM/Ridge
+    kind = "minmax" (x−min)/(max−min) ที่ CV เลือกใน notebook | "standard" z-score (x−μ)/σ"""
+    from sklearn.preprocessing import MinMaxScaler, StandardScaler
 
-    scaler = StandardScaler().fit(X_train)
+    scaler = (MinMaxScaler() if kind == "minmax" else StandardScaler()).fit(X_train)
     return (scaler, scaler.transform(X_train), *[scaler.transform(o) for o in others])
 
 
