@@ -427,7 +427,9 @@ def page_data(B):
 def page_search(B):
     st.title('Hyperparameter search (คะแนน = ค่าเฉลี่ย R² ของ 4 fold)')
     st.json(B['best_params'], expanded=False)
-    names = {'xgboost': 'XGBoost — random search 40 configs', 'svr': 'SVR — grid scaler × C × epsilon × gamma (384 configs)', 'lstm': 'LSTM — window × hidden × scaler', 'ridge': 'Ridge — scaler × alpha'}
+    st.caption(B.get('scaler_rule', ''))
+    names = {'linear': 'Linear — scaler (none / z-score / min-max)', 'ridge': 'Ridge — scaler × alpha', 'xgboost': 'XGBoost — random search 40 configs × 3 scalers (120 การประเมิน)',
+             'svr': 'SVR — grid scaler × C × epsilon × gamma (576 configs)', 'lstm': 'LSTM — window × hidden × scaler', 'autogluon': 'AutoGluon — scaler'}
     for key, title in names.items():
         t = B['search'].get(key)
         if t is None:
@@ -447,11 +449,14 @@ def page_search(B):
                    'γ ที่ CV เลือกให้ RBF เล็กมาก (0.0005 บน input [0,1]) kernel จึงทำงานในโหมดเกือบเชิงเส้น (CV เท่ากับ linear kernel) · คอลัมน์ test ไม่ได้ใช้เลือก แสดงเพื่อความโปร่งใส')
 
     if B.get('scale_check') is not None:
-        st.subheader('โมเดลไหนต้อง normalize และแบบไหน? — none / z-score / min-max (scaler fit บน train ของ fold)')
+        st.subheader('โมเดลไหนต้อง normalize และแบบไหน? — ทุกโมเดล search none / z-score / min-max ด้วย CV (scaler fit บน train ของ fold)')
         st.dataframe(B['scale_check'].style.format({'cv mean R2': '{:.4f}', 'test R2': '{:.4f}'}), width='stretch')
-        st.caption('Linear และ XGBoost ผลเท่าเดิมทุกแบบ (scale-invariant) · SVR และ LSTM ต้อง scale และ CV เลือก min-max (x−min)/(max−min): return มีหางหนา (−21% ถึง +24%) '
-                   'z-score ทำให้วันสุดขั้วมี |z| 5–10 ซึ่งทำให้ระยะทางใน RBF kernel ระเบิดและ gate ของ LSTM อิ่มตัว ส่วน min-max บีบทุกค่าลง [0,1] · '
-                   'Ridge ไวต่อ scale (penalty ขึ้นกับหน่วย) จึงให้ CV เลือกทั้ง alpha และ scaler แล้วแปลง coefficient กลับเป็นหน่วยเดิม · target ไม่ scale (หน่วย %)')
+        sc = B['scale_check']['cv mean R2'].groupby(level='model', sort=False).agg(lambda x: x.max() - x.min())
+        chosen = {k: v.get('scaler', 'none') for k, v in B['best_params'].items()}
+        st.caption(f"scaler ที่ CV เลือก: {chosen} · ความต่างของ CV mean ระหว่าง scaler ต่อโมเดล: {', '.join(f'{k} {v:.4f}' for k, v in sc.items())} · "
+                   f"กติกาเดียวกันทุกโมเดล: CV สูงสุด แต่ถ้า none ตามหลังไม่เกิน 0.001 ให้ none (parsimony) → เลือก none (scale ไม่ช่วย): {[k for k, v in chosen.items() if v == 'none']} | เลือก scale (ช่วยจริง): {[k for k, v in chosen.items() if v != 'none']} · "
+                   'เหตุผลเชิงกลไก: OLS scale-equivariant · tree แบ่ง node ด้วยลำดับของค่า · AutoGluon มี preprocessing ของตัวเองต่อโมเดล · Ridge (penalty ขึ้นกับหน่วย) / SVR (RBF ใช้ระยะทาง) / LSTM (gate อิ่มตัว) ไวต่อ scale — '
+                   'return มีหางหนา (−21% ถึง +24%) z-score ทำให้วันสุดขั้วมี |z| 5–10 ส่วน min-max บีบทุกค่าลง [0,1] · target ไม่ scale (หน่วย %)')
 
     if B.get('ag_leaderboard') is not None:
         st.subheader('AutoGluon leaderboard (final model, tuning_data = 20% ท้ายของ train)')
@@ -467,7 +472,7 @@ def page_method(B):
 2. **Un-swap** — คอลัมน์เป็นช่องอันดับ ต้องจับคู่ราคาวัน t กับ t−1 ให้เป็นบริษัทเดิมก่อนคำนวณ return: Hungarian assignment + penalty การเลื่อนอันดับ + market proxy (median ของ 10 ช่อง) + กฎหุ้นเข้า/ออกเฉพาะอันดับ 9–10 ที่ต้องมีหลักฐาน; ช่องที่เปลี่ยนตัวเติมด้วยค่าเฉลี่ยของช่องอื่น
 3. **Same-day** — return ของอันดับ 1–10 วัน t อธิบาย return ดัชนีวัน t (วัดอิทธิพล ไม่ใช่ทำนายอนาคต)
 4. **Split** — train 2,011 วัน / test 503 วัน (12/2023–12/2025); expanding-window CV 4 fold × 365 วันใน train; scaler fit ต่อ fold; เลือก hyperparameter จาก CV เท่านั้น; test วัดครั้งเดียว
-5. **โมเดล** — Linear, Ridge, XGBoost (random search), SVR (grid), LSTM (PyTorch, early stopping บน inner holdout), AutoGluon (tuning_data = 20% ท้ายของ train); สำหรับ SVR / LSTM / Ridge ชนิด scaler (z-score vs min-max) เป็น hyperparameter ที่เลือกจาก CV
+5. **โมเดล** — Linear, Ridge, XGBoost (random search), SVR (grid), LSTM (PyTorch, early stopping บน inner holdout), AutoGluon (tuning_data = 20% ท้ายของ train); *ทุกโมเดล* มีชนิด scaler (none / z-score / min-max) เป็น hyperparameter ที่เลือกจาก CV ด้วยกติกาเดียวกัน (CV สูงสุด; ถ้า none ตามหลังไม่เกิน 0.001 เลือก none)
 6. **Metric** — R² คำนวณบน return รายวัน; MAE, MSE, RMSE (หน่วยจุดดัชนี) และ MAPE (%) คำนวณบนระดับดัชนี (ระดับที่ทำนาย = ระดับเมื่อวาน × (1 + return ที่ทำนาย)) — MAPE ไม่คำนวณบน return เพราะหารด้วยค่าจริงที่ใกล้ 0 จะได้ตัวเลขหลายร้อย % ที่ไม่สื่ออะไร (ดูคำอธิบายในหน้าภาพรวม)
 
 ### ข้อสรุป
@@ -496,9 +501,10 @@ def page_method(B):
          'ตรวจ 4 ทาง: คู่หุ้นราคาใกล้กัน (GOOGL/GOOG) ได้ correlation 0.976; R² test จาก −1.9 → 0.71; การขยับใหญ่ที่เก็บไว้ตรงกับเหตุการณ์จริงที่ทราบวันที่ (META −19% 26/7/2018, NVDA +24% 25/5/2023, META +20% 2/2/2024, NVDA −17% 27/1/2025); '
          'และตาราง sensitivity: ขยับพารามิเตอร์ทุกตัวแล้วผลระดับรวมแทบไม่เปลี่ยน — กฎ boundary jump >20% ตั้งจากการตรวจ event ปลอม (TSLA/AVGO สลับกันที่อันดับ 10 ปี 2024) กับราคาจริง ไม่ใช่การจูนกับ R² test และแสดงผลเมื่อปิดกฎไว้ด้วย'),
         ('โมเดลไหนต้อง normalize ใช้สูตรอะไร และทำไม?',
-         'SVR และ LSTM ต้อง (distance-based / neural net) — ชนิด scaler เป็น hyperparameter ที่เลือกจาก CV ระหว่าง z-score (x−μ)/σ กับ min-max (x−min)/(max−min) โดย fit บน train ของแต่ละ fold เท่านั้น: '
-         'CV เลือก min-max ให้ทั้งคู่ เพราะ return มีหางหนา (−21% ถึง +24%) z-score ทำให้วันสุดขั้วมี |z| 5–10 ซึ่งทำให้ระยะทางใน RBF kernel ระเบิดและ gate ของ LSTM อิ่มตัว ส่วน min-max บีบทุกค่าลง [0,1] '
-         '(ตารางในหน้า Hyperparameter search เทียบ none / z-score / min-max); Linear และ XGBoost/AutoGluon ไม่ต้อง (ผลเท่าเดิมทุกแบบ); Ridge ไวต่อ scale จึงให้ CV เลือกทั้ง alpha และ scaler แล้วแปลง coefficient กลับเป็นหน่วยเดิม; target ไม่ scale (หน่วย %)'),
+         'ทุกโมเดลถูกปฏิบัติเหมือนกัน: ชนิด scaler เป็น hyperparameter ที่ CV เลือกจาก none / z-score (x−μ)/σ / min-max (x−min)/(max−min) โดย scaler fit บน train ของแต่ละ fold เท่านั้น และใช้กติกาเดียวกัน (CV สูงสุด; ถ้า none ตามหลังไม่เกิน 0.001 ให้ none) — '
+         'ผล (ตารางในหน้า Hyperparameter search): Linear ทั้ง 3 แบบเท่ากันถึงทศนิยมที่ 15 (OLS scale-equivariant), XGBoost ทุก config ใน search ต่างกัน < 1e-5 (tree แบ่ง node ด้วยลำดับของค่า), AutoGluon none ดีที่สุดอยู่แล้ว (ต่างกัน 0.002; มี preprocessing ของตัวเองต่อโมเดล) → ทั้งสามเลือก none; '
+         'Ridge (+0.017), SVR (+0.024) และ LSTM (+0.046) ดีขึ้นชัดเจนเมื่อ scale และ CV เลือก min-max ทั้งสามตัว: return มีหางหนา (−21% ถึง +24%) z-score ทำให้วันสุดขั้วมี |z| 5–10 (ระยะทางใน RBF ระเบิด / gate ของ LSTM อิ่มตัว) ส่วน min-max บีบทุกค่าลง [0,1]; '
+         'Ridge penalty ขึ้นกับหน่วย ชนิด scaler จึงเปลี่ยนรูปแบบการ shrink — coefficient แปลงกลับเป็นหน่วยเดิมเพื่อตีความ; target ไม่ scale (หน่วย %)'),
         ('Hyperparameter ถูกเลือกโดยเห็น test ไหม?',
          'ไม่ — ทุก search ใช้ค่าเฉลี่ย R² ของ 4 val fold เท่านั้น แล้ว fit ใหม่บน train ทั้งหมด วัด test ครั้งเดียว; LSTM early stopping และ AutoGluon tuning ใช้ส่วนท้ายของ train (อดีต); scaler fit ต่อ fold'),
         ('ค่า val ราย fold optimistic ไหม?',

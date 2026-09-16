@@ -22,7 +22,7 @@ R² คำนวณบน return รายวัน; MAE/MSE/RMSE/MAPE คำน
 - Sensitivity ของดัชนีต่อ top 10 ขึ้นกับ regime: ~0.7–0.9% ต่อ 1% ในปีผันผวน แต่ ~0.5% ในปี 2023–24
 - Importance กระจุกที่อันดับ 7–10 ไม่ใช่ 1–3 — เป็นผลของ collinearity ในกลุ่มเทค (อันดับ 1–5 แชร์เครดิต) และอันดับ 7–10 เป็น proxy ของหุ้นอีก 490 ตัว ไม่ใช่น้ำหนัก market cap
 - AutoGluon/XGBoost/SVR/Ridge ดีกว่า Linear บน test อย่างมีนัยสำคัญ (block bootstrap + Diebold–Mariano; LSTM ไม่ต่าง) แต่ใน fold COVID Linear ดีที่สุดเพราะ extrapolate ได้
-- SVR / LSTM / Ridge ต้อง scale feature และ CV เลือก **min-max** เหนือ z-score ทั้งสามตัว (return มีหางหนา) ส่วน Linear / XGBoost / AutoGluon ไม่ต้อง — ตารางเทียบ none / z-score / min-max อยู่ใน notebook section 9b
+- ทุกโมเดล search ชนิด scaler (none / z-score / min-max) ด้วย CV และกติกาเดียวกัน: Linear / XGBoost / AutoGluon ไม่ต่างกัน → none; Ridge / SVR / LSTM ดีขึ้นชัดเจนเมื่อ scale และ CV เลือก **min-max** (return มีหางหนา) — ตารางเทียบอยู่ใน notebook section 10b
 
 รายละเอียด การตรวจสอบ (ADF, next-day placebo, sensitivity ของ un-swap, VIF) และคำถาม-คำตอบสำหรับการนำเสนออยู่ใน notebook section 14–15
 
@@ -50,7 +50,7 @@ Dashboard (ใช้ผลที่ export ไว้แล้ว ไม่ต้
 .\.venv\Scripts\python -m streamlit run dashboard.py
 ```
 
-รัน notebook ใหม่ (~10 นาทีบน CPU; AutoGluon เพิ่ม ~10 นาที — ตั้ง `RUN_AUTOGLUON = False` ที่ cell แรกถ้าไม่ได้ติดตั้ง):
+รัน notebook ใหม่ (~12 นาทีบน CPU; AutoGluon เพิ่ม ~8 นาที — ตั้ง `RUN_AUTOGLUON = False` ที่ cell แรกถ้าไม่ได้ติดตั้ง):
 
 ```bash
 .\.venv\Scripts\jupyter lab sp500_top10_influence.ipynb
@@ -61,6 +61,6 @@ Dashboard (ใช้ผลที่ export ไว้แล้ว ไม่ต้
 1. **ใช้ return ไม่ใช่ level** — level ไม่ stationary (ADF p ≈ 0.98) ทำให้ R² 0.99 แบบ spurious และ tree model extrapolate ไม่ได้ (test R² = −4.1)
 2. **Un-swap** — คอลัมน์เป็นช่องอันดับ ต้องจับคู่ราคาวัน t กับ t−1 ให้เป็นบริษัทเดิมก่อนคำนวณ return (Hungarian assignment + rank penalty + market proxy + กฎหุ้นเข้า/ออกที่อันดับ 9–10); ตรวจสอบด้วยคู่ราคาใกล้กัน (corr 0.976), R² ก่อน/หลัง (−1.9 → 0.71) และ sensitivity ของพารามิเตอร์
 3. **Same-day** — วัดอิทธิพล ไม่ใช่การพยากรณ์ (ใช้ return เมื่อวานทำนายวันนี้ได้ R² ≈ 0)
-4. **ไม่มี leakage** — scaler fit ต่อ fold และชนิด scaler (z-score / min-max) เป็น hyperparameter ที่เลือกจาก CV, hyperparameter ทุกตัวเลือกจาก CV เท่านั้น, LSTM/AutoGluon ใช้ส่วนท้ายของ train สำหรับ early stopping/tuning, test วัดครั้งเดียว
+4. **ไม่มี leakage** — scaler fit ต่อ fold และชนิด scaler (none / z-score / min-max) เป็น hyperparameter ที่เลือกจาก CV สำหรับทุกโมเดล, hyperparameter ทุกตัวเลือกจาก CV เท่านั้น, LSTM/AutoGluon ใช้ส่วนท้ายของ train สำหรับ early stopping/tuning, test วัดครั้งเดียว
 
 ข้อจำกัด: ไม่มี ticker และ market cap → ตีความได้ระดับอันดับ และ coefficient/importance เป็น sensitivity เชิงสถิติ (รวม co-movement) ไม่ใช่น้ำหนักในดัชนี
