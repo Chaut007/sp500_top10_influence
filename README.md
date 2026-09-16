@@ -33,6 +33,7 @@ R² คำนวณบน return รายวัน; MAE/MSE/RMSE/MAPE คำน
 | `sp500_top10_influence.ipynb` | notebook หลัก (รันแล้ว มี output ครบ) — data prep, un-swap, โมเดล 6 ตัว, tuning, importance, สรุปผล, Q&A |
 | `dashboard.py` | Streamlit dashboard 7 หน้า อ่านผลจาก `dashboard_data.pkl` |
 | `dashboard_data.pkl` | ผลลัพธ์ทั้งหมดที่ notebook export (metrics, predictions, importance, diagnostics ฯลฯ) |
+| `train_dataset.csv` / `test_dataset.csv` | feature r_1..r_10 + target (%) + คอลัมน์ cv_role — notebook section 16 เขียนไฟล์นี้ตรงๆ ทุกครั้งที่รัน (ไม่ต้อง sync มือ); dashboard อ่านไฟล์นี้ตรงๆ ด้วย (fallback เป็นการคำนวณจาก `dashboard_data.pkl` ถ้าไม่มีไฟล์) |
 | `data_prep.py` | โมดูลเวอร์ชันของ section 3–4 (un-swap + split) สำหรับใช้ในสคริปต์ |
 | `modelling_table(new).csv` | ข้อมูลต้นทาง: `close_1..close_10` = adj close ของหุ้นอันดับ 1–10 *ในวันนั้น* (ช่องอันดับ ไม่ใช่หุ้นตัวเดิม), `target` = S&P 500 — แถวแรก (4/1/2016) คำนวณ return ได้ด้วยแถวอ้างอิง 31/12/2015 จาก Yahoo Finance ที่ฝังไว้ใน notebook/`data_prep.py` (`REF_ROW`) |
 | `results_summary.csv` | ตาราง metric ทุกโมเดล ทุก split (export จาก `dashboard_data.pkl`) |

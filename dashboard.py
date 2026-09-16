@@ -68,8 +68,16 @@ def csv_bytes(df: pd.DataFrame, index=True) -> bytes:
     return df.to_csv(index=index, float_format='%.6f').encode('utf-8-sig')      # BOM ให้ Excel เปิดภาษาไทย/ตัวเลขถูก
 
 
+TRAIN_CSV = Path(__file__).with_name('train_dataset.csv')
+TEST_CSV = Path(__file__).with_name('test_dataset.csv')
+
+
 def build_datasets(B):
-    '''train/test dataset ตามที่โมเดลใช้จริง (return %, un-swapped) + คอลัมน์ cv_role'''
+    '''train/test dataset ตามที่โมเดลใช้จริง (return %, un-swapped) + คอลัมน์ cv_role
+    อ่านจาก train_dataset.csv / test_dataset.csv ที่ notebook section 16 export ไว้ตรงๆ (single source of truth เดียวกับไฟล์ที่ดาวน์โหลดได้/อยู่ใน git)
+    fallback: คำนวณจาก B['returns'] เองถ้าไม่มีไฟล์ (เช่น มีแค่ dashboard_data.pkl ไฟล์เดียว)'''
+    if TRAIN_CSV.exists() and TEST_CSV.exists():
+        return pd.read_csv(TRAIN_CSV, index_col=0, parse_dates=True), pd.read_csv(TEST_CSV, index_col=0, parse_dates=True)
     df = B['returns']; ret_cols = [f'r_{k}' for k in range(1, 11)]
     role = np.array(['always train (rows 1-551)'] * len(df), dtype=object)
     for name, (a, b) in zip(['fold1 val', 'fold2 val', 'fold3 val', 'fold4 val'], [(551, 916), (916, 1281), (1281, 1646), (1646, 2011)]):
@@ -79,14 +87,19 @@ def build_datasets(B):
     return out.iloc[:2011], out.iloc[2011:]
 
 
+def csv_bytes_or_file(path: Path, df: pd.DataFrame) -> bytes:
+    '''bytes สำหรับดาวน์โหลด — อ่านไฟล์จริงตรงๆ ถ้ามี (การันตีเหมือนไฟล์ที่อยู่ใน git เป๊ะ) ไม่งั้น fallback เป็นการแปลง DataFrame'''
+    return path.read_bytes() if path.exists() else csv_bytes(df)
+
+
 def download_section(B, key='dl'):
     st.subheader('ดาวน์โหลดข้อมูลและผลลัพธ์ (CSV)')
     train, test = build_datasets(B)
     res = B['results'].copy(); res['split'] = pd.Categorical(res['split'], SPLITS); res = res.sort_values(['model', 'split'])
     pred = B['predictions'].sort_values(['model', 'split', 'date'])
     items = [
-        ('train_dataset.csv', 'Train set (2,011 แถว: feature r_1..r_10 + r_target %, cv_role)', csv_bytes(train)),
-        ('test_dataset.csv', 'Test set (503 แถว)', csv_bytes(test)),
+        ('train_dataset.csv', 'Train set (2,011 แถว: feature r_1..r_10 + r_target %, cv_role)', csv_bytes_or_file(TRAIN_CSV, train)),
+        ('test_dataset.csv', 'Test set (503 แถว)', csv_bytes_or_file(TEST_CSV, test)),
         ('results_summary.csv', 'Metric ทุกโมเดล ทุก split (R², MAE, MSE, RMSE, MAPE)', csv_bytes(res, index=False)),
         ('predictions.csv', 'ค่าทำนายรายวันของทุกโมเดล ทุก split (y_true, y_pred)', csv_bytes(pred, index=False)),
         ('returns_table.csv', 'ตาราง return หลัง un-swap ทั้ง 2,514 วัน + swapped / n_unmatched', csv_bytes(B['returns'])),
