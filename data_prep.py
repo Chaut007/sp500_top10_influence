@@ -71,94 +71,127 @@ def load_prices(path: Path | str = CSV_PATH) -> pd.DataFrame:
 # ----------------------------------------------------------------------------- un-swap
 def unswap_returns(prices: pd.DataFrame, lam: float = 0.01, cap: float = 0.35, th_idio: float = 0.08,
                    th_big: float = 0.20, boundary: int = 8, dormant_days: int = 30, look_days: int = 20):
-    """
+    '''แปลงตารางราคาแบบ "ช่องอันดับ" ให้เป็น return รายวันของบริษัทเดิม
+
+    ทำทีละวัน t เทียบกับ t-1
+      ขั้น 1  จับคู่ช่องวันนี้กับช่องเมื่อวานด้วย Hungarian assignment
+              cost = |log return - market shift| (capped ที่ `cap`) + `lam` x จำนวนอันดับที่เลื่อน
+              ทำ 2 รอบ: รอบแรกประมาณ market shift (median ของ log return) แล้วจับคู่ใหม่โดยหัก shift นั้น
+      ขั้น 2  market proxy ของวัน = median ของ log return หลังจับคู่ (ไม่ใช้ target -> ไม่ leak)
+      ขั้น 3  ตัดสินทุกคู่ว่าเป็นการขยับจริง ('real') หรือหุ้นเข้า/ออก ('exit' -> return เป็น NaN)
+                - |log return| > cap                                          -> exit
+                - ช่อง >= boundary (อันดับ 9-10) และ idiosyncratic move > th_big -> exit
+                - ช่อง >= boundary และ idiosyncratic move > th_idio           -> exit เมื่อมีหลักฐานอย่างใดอย่างหนึ่ง
+                     (ก) ราคาตัวที่เข้ามาตรงกับหุ้นที่ออกไปภายใน `dormant_days` (ปรับด้วย market proxy)
+                     (ข) หุ้นที่ออกไปกลับมาภายใน `look_days` วัน และตัวที่เข้ามาหายไป
+                - นอกนั้น                                                     -> real
     คืน (returns, diag, market_proxy)
-      returns      : DataFrame r_1..r_10 (simple return; NaN = หุ้นเข้า/ออก หรือแถวแรก) + swapped (bool) + n_unmatched
-      diag         : ทุก event ที่ idiosyncratic move > th_idio พร้อม status (real/exit) และเหตุผล (index = date)
-      market_proxy : Series median return ของ 10 ช่องต่อวัน (%)
-    """
-    LP = np.log(prices[SLOT_COLS].to_numpy(dtype=float))
-    T, K = LP.shape
-    pen = lam * np.abs(np.arange(K)[:, None] - np.arange(K)[None, :])
+      returns      : DataFrame r_1..r_10 (simple return; NaN = หุ้นเข้า/ออก หรือแถวแรก) + swapped + n_unmatched
+      diag         : ทุก event ที่ idiosyncratic move > th_idio หรือ |log return| > cap พร้อม status และเหตุผล
+      market_proxy : Series market proxy รายวัน (หน่วย %)
+    '''
+    log_p = np.log(prices[SLOT_COLS].to_numpy(dtype=float))              # (T วัน, K ช่อง)
+    T, K = log_p.shape
+    rank_penalty = lam * np.abs(np.arange(K)[:, None] - np.arange(K)[None, :])
 
-    def assign(t, shift):
-        C = np.minimum(np.abs(LP[t][:, None] - LP[t - 1][None, :] - shift), cap) + pen
-        ri, cj = linear_sum_assignment(C)
-        s = np.empty(K, int)
-        s[ri] = cj
-        return s
+    def match_slots(t, market_shift):
+        '''prev_slot[i] = ช่องของเมื่อวานที่จับคู่กับช่อง i ของวันนี้ (cost รวมต่ำสุด)'''
+        cost = np.minimum(np.abs(log_p[t][:, None] - log_p[t - 1][None, :] - market_shift), cap) + rank_penalty
+        row, col = linear_sum_assignment(cost)
+        prev_slot = np.empty(K, int)
+        prev_slot[row] = col
+        return prev_slot
 
-    # pass 1: จับคู่แบบดิบเพื่อประมาณ market proxy -> pass 2: จับคู่ใหม่ด้วย cost ที่หัก market proxy
-    sigma = np.zeros((T, K), int)
-    rho = np.full((T, K), np.nan)
-    med = np.zeros(T)
+    def tol(days_gap):
+        '''ความคลาดเคลื่อนของ log price ที่ยอมรับเมื่อเทียบราคาข้ามวัน — กว้างขึ้นตาม sqrt(จำนวนวัน)'''
+        return 0.02 + 0.02 * np.sqrt(max(days_gap, 1))
+
+    # ---- ขั้น 1-2: จับคู่ทุกวัน + market proxy ----
+    prev_slot = np.zeros((T, K), int)         # ช่องเมื่อวานของแต่ละช่องวันนี้
+    log_ret = np.full((T, K), np.nan)         # log return หลังจับคู่
+    mkt = np.zeros(T)                         # market proxy รายวัน (log)
     for t in range(1, T):
-        d1 = LP[t] - LP[t - 1][assign(t, 0.0)]
-        m1 = np.median(d1[np.abs(d1) < cap]) if (np.abs(d1) < cap).any() else 0.0
-        sigma[t] = assign(t, m1)
-        rho[t] = LP[t] - LP[t - 1][sigma[t]]
-        ok = np.abs(rho[t] - m1) < cap
-        med[t] = np.median(rho[t][ok]) if ok.any() else m1
-    M = np.cumsum(med)
+        first_pass = log_p[t] - log_p[t - 1][match_slots(t, 0.0)]
+        usable = np.abs(first_pass) < cap
+        shift = np.median(first_pass[usable]) if usable.any() else 0.0
+        prev_slot[t] = match_slots(t, shift)
+        log_ret[t] = log_p[t] - log_p[t - 1][prev_slot[t]]
+        usable = np.abs(log_ret[t] - shift) < cap
+        mkt[t] = np.median(log_ret[t][usable]) if usable.any() else shift
+    mkt_cum = np.cumsum(mkt)                  # market proxy สะสม — ใช้ปรับราคาเมื่อเทียบข้ามวัน
 
-    def tol(k):
-        return 0.02 + 0.02 * np.sqrt(max(k, 1))
+    # ---- ขั้น 3: real หรือ exit ----
+    dormant = []                              # หุ้นที่เพิ่งออกจาก top 10: [log price วันสุดท้าย, วันสุดท้าย, ช่อง]
 
-    # pass 3: ตัดสินว่าแต่ละคู่เป็นการขยับจริง หรือหุ้นเข้า/ออก
-    R = np.full((T, K), np.nan)
-    src = np.full((T, K), -1, int)
-    rows = []
-    dormant = []  # [log price ตอนออก, วันสุดท้ายที่อยู่, อันดับ]
+    def matches_dormant(t, slot):
+        '''หลักฐาน (ก): ราคาตัวที่เข้ามาช่อง slot วัน t ตรงกับหุ้นที่เพิ่งออกไป -> คืน entry นั้น (ตัวแรกที่ตรง)'''
+        for entry in dormant:
+            log_price_exit, last_day, _ = entry
+            if abs(log_p[t, slot] - (log_price_exit + mkt_cum[t] - mkt_cum[last_day])) < tol(t - last_day):
+                return entry
+        return None
+
+    def exiting_company_returns(t, slot, prev):
+        '''หลักฐาน (ข): หุ้นที่อยู่ช่อง prev เมื่อวาน กลับมาโผล่ที่ช่อง >= boundary ภายใน look_days วัน (พร้อมกระโดดเข้ามาใหม่)
+        และตัวที่เข้ามาแทนในช่อง slot วัน t หายไปในวันนั้น -> คืนจำนวนวัน (None = ไม่พบ)'''
+        for k in range(1, look_days + 1):
+            if t + k >= T:
+                break
+            came_back = np.abs(log_p[t + k] - (log_p[t - 1, prev] + mkt_cum[t + k] - mkt_cum[t - 1])) < tol(k + 1)
+            came_back[:boundary] = False
+            jumped_in = np.abs((log_p[t + k] - log_p[t + k - 1]) - mkt[t + k]) > th_idio
+            entrant_gone = not (np.abs(log_p[t + k] - (log_p[t, slot] + mkt_cum[t + k] - mkt_cum[t])) < tol(k)).any()
+            if (came_back & jumped_in).any() and entrant_gone:
+                return k
+        return None
+
+    ret = np.full((T, K), np.nan)             # log return ที่ยอมรับว่าเป็นบริษัทเดิม
+    src = np.full((T, K), -1, int)            # ช่องเมื่อวานของค่าที่ยอมรับ (-1 = exit)
+    events = []
     for t in range(1, T):
-        exits = []
-        for i in range(K):
-            j = sigma[t, i]
-            a = abs(rho[t, i])
-            a_ex = abs(rho[t, i] - med[t])
-            kind, why = "real", ""
-            at_boundary = i >= boundary or j >= boundary
-            if a > cap:
-                kind, why = "exit", f"|log return| {a:.0%} > {cap:.0%}"
-            elif at_boundary and a_ex > th_big:
-                kind, why = "exit", f"idiosyncratic jump {a_ex:.0%} > {th_big:.0%} at rank 9-10"
-            elif at_boundary and a_ex > th_idio:
-                hit = next((d for d in dormant if abs(LP[t, i] - (d[0] + M[t] - M[d[1]])) < tol(t - d[1])), None)
+        exits_today = []
+        for slot in range(K):
+            prev = prev_slot[t, slot]
+            abs_ret = abs(log_ret[t, slot])                     # ขนาดการขยับ
+            abs_idio = abs(log_ret[t, slot] - mkt[t])           # ขนาดการขยับหลังหักตลาด (idiosyncratic)
+            at_boundary = slot >= boundary or prev >= boundary
+            status, reason = 'real', ''
+            if abs_ret > cap:
+                status, reason = 'exit', f'|log return| {abs_ret:.0%} > {cap:.0%}'
+            elif at_boundary and abs_idio > th_big:
+                status, reason = 'exit', f'idiosyncratic jump {abs_idio:.0%} > {th_big:.0%} at rank 9-10'
+            elif at_boundary and abs_idio > th_idio:
+                hit = matches_dormant(t, slot)
                 if hit is not None:
-                    kind, why = "exit", f"entrant = company that left {t - hit[1]}d ago"
+                    status, reason = 'exit', f'entrant = company that left {t - hit[1]}d ago'
                     dormant.remove(hit)
                 else:
-                    for k in range(1, look_days + 1):
-                        if t + k >= T:
-                            break
-                        back = np.abs(LP[t + k] - (LP[t - 1, j] + M[t + k] - M[t - 1])) < tol(k + 1)
-                        back[:boundary] = False
-                        new_app = np.abs((LP[t + k] - LP[t + k - 1]) - med[t + k]) > th_idio
-                        entrant_gone = not (np.abs(LP[t + k] - (LP[t, i] + M[t + k] - M[t])) < tol(k)).any()
-                        if (back & new_app).any() and entrant_gone:
-                            kind, why = "exit", f"exiting company returns after {k}d"
-                            break
-            if kind == "exit":
-                exits.append(j)
+                    k_back = exiting_company_returns(t, slot, prev)
+                    if k_back is not None:
+                        status, reason = 'exit', f'exiting company returns after {k_back}d'
+            if status == 'exit':
+                exits_today.append(prev)
             else:
-                R[t, i] = rho[t, i]
-                src[t, i] = j
-            if a_ex > th_idio or a > cap:
-                rows.append({"date": prices.index[t], "slot": i + 1, "prev_slot": j + 1, "prev_value": np.exp(LP[t - 1, j]),
-                             "new_value": np.exp(LP[t, i]), "pct_move": 100 * np.expm1(rho[t, i]),
-                             "top10_median_%": 100 * np.expm1(med[t]), "status": kind, "reason": why})
-        for j in exits:
-            dormant.append([LP[t - 1, j], t - 1, j])
-        dormant = [d for d in dormant if t - d[1] <= dormant_days]
+                ret[t, slot] = log_ret[t, slot]
+                src[t, slot] = prev
+            if abs_idio > th_idio or abs_ret > cap:
+                events.append({'date': prices.index[t], 'slot': slot + 1, 'prev_slot': prev + 1,
+                               'prev_value': np.exp(log_p[t - 1, prev]), 'new_value': np.exp(log_p[t, slot]),
+                               'pct_move': 100 * np.expm1(log_ret[t, slot]), 'top10_median_%': 100 * np.expm1(mkt[t]),
+                               'status': status, 'reason': reason})
+        for prev in exits_today:
+            dormant.append([log_p[t - 1, prev], t - 1, prev])
+        dormant[:] = [d for d in dormant if t - d[1] <= dormant_days]
 
-    out = pd.DataFrame(np.expm1(R), index=prices.index, columns=RET_COLS)
+    out = pd.DataFrame(np.expm1(ret), index=prices.index, columns=RET_COLS)
     matched = src >= 0
-    out["swapped"] = ((src != np.arange(K)[None, :]) & matched).any(axis=1)
-    out["n_unmatched"] = (~matched).sum(axis=1)
-    out.iloc[0, out.columns.get_loc("n_unmatched")] = 0  # แถวแรกไม่มีวันก่อนหน้า
-    diag = pd.DataFrame(rows, columns=["date", "slot", "prev_slot", "prev_value", "new_value", "pct_move",
-                                       "top10_median_%", "status", "reason"]).set_index("date")
-    proxy = pd.Series(np.expm1(med) * 100, index=prices.index, name="top10_median_%")
-    return out, diag, proxy
+    out['swapped'] = ((src != np.arange(K)[None, :]) & matched).any(axis=1)
+    out['n_unmatched'] = (~matched).sum(axis=1)
+    out.iloc[0, out.columns.get_loc('n_unmatched')] = 0                    # แถวแรกไม่มีวันก่อนหน้า
+    diag = pd.DataFrame(events, columns=['date', 'slot', 'prev_slot', 'prev_value', 'new_value', 'pct_move',
+                                         'top10_median_%', 'status', 'reason']).set_index('date')
+    market_proxy = pd.Series(np.expm1(mkt) * 100, index=prices.index, name='top10_median_%')
+    return out, diag, market_proxy
 
 
 # ----------------------------------------------------------------------------- dataset
