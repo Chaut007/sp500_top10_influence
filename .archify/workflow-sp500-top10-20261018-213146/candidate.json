@@ -1,0 +1,497 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "อิทธิพลของหุ้น Top 10 ต่อ S&P 500 — workflow ของโปรเจกต์",
+    "quality_profile": "showcase",
+    "output": ".archify/workflow-sp500-top10-20261018-213146/sp500-top10-workflow.html",
+    "repository": {
+      "url": "https://github.com/Chaut007/sp500_top10_influence.git",
+      "provider": "github",
+      "revision": "637422b1bc448f29278f8bdd38bf661b39efda77"
+    },
+    "legend": {
+      "entries": {
+        "database": {
+          "label": "ไฟล์ข้อมูล"
+        },
+        "backend": {
+          "label": "ขั้นตอนประมวลผล"
+        },
+        "messagebus": {
+          "label": "รอบ cross-validation"
+        },
+        "security": {
+          "label": "การตรวจสอบ"
+        },
+        "frontend": {
+          "label": "แดชบอร์ด"
+        }
+      }
+    }
+  },
+  "lanes": [
+    {
+      "id": "data",
+      "label": "ข้อมูลและการเตรียม"
+    },
+    {
+      "id": "model",
+      "label": "เลือกและวัดผลโมเดล"
+    },
+    {
+      "id": "deliver",
+      "label": "ส่งออกและนำเสนอ"
+    },
+    {
+      "id": "checks",
+      "label": "การตรวจสอบความถูกต้อง",
+      "variant": "exception"
+    }
+  ],
+  "phases": [
+    {
+      "id": "prep",
+      "label": "เตรียมข้อมูล",
+      "fromCol": 0,
+      "toCol": 1
+    },
+    {
+      "id": "modelling",
+      "label": "CV แล้ว fit",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "report",
+      "label": "วัดผลและส่งออก",
+      "fromCol": 4,
+      "toCol": 5
+    }
+  ],
+  "groups": [
+    {
+      "id": "notest",
+      "label": "ไม่แตะ test",
+      "lane": "model",
+      "fromCol": 2,
+      "toCol": 3,
+      "variant": "emphasis"
+    },
+    {
+      "id": "guards",
+      "label": "กันผลหลอกและ leakage",
+      "lane": "checks",
+      "fromCol": 0,
+      "toCol": 4,
+      "variant": "security"
+    }
+  ],
+  "mainPath": [
+    "csv",
+    "unswap",
+    "split",
+    "cv",
+    "fit",
+    "test",
+    "bundle",
+    "dash"
+  ],
+  "nodes": [
+    {
+      "id": "csv",
+      "lane": "data",
+      "col": 0,
+      "type": "database",
+      "label": "ตารางราคาต้นทาง",
+      "sublabel": "modelling_table(new).csv",
+      "tag": "ช่องอันดับ 1–10 + target",
+      "sources": [
+        {
+          "path": "data_prep.py",
+          "line": 42,
+          "end_line": 51,
+          "label": "คอลัมน์ + แถวอ้างอิง"
+        },
+        {
+          "path": "data_prep.py",
+          "line": 62,
+          "end_line": 68,
+          "label": "load_prices"
+        }
+      ],
+      "width": 172
+    },
+    {
+      "id": "unswap",
+      "lane": "data",
+      "col": 1,
+      "type": "backend",
+      "label": "Un-swap → return",
+      "sublabel": "จับคู่บริษัทเดิม t กับ t−1",
+      "tag": "Hungarian + rank penalty",
+      "sources": [
+        {
+          "path": "data_prep.py",
+          "line": 72,
+          "end_line": 96,
+          "label": "unswap_returns"
+        },
+        {
+          "path": "data_prep.py",
+          "line": 198,
+          "end_line": 226,
+          "label": "build_dataset"
+        }
+      ],
+      "width": 168
+    },
+    {
+      "id": "split",
+      "lane": "data",
+      "col": 2,
+      "type": "backend",
+      "label": "Split ตามเวลา",
+      "sublabel": "train 2,011 / test 503 วัน",
+      "tag": "4 fold × 365 วัน",
+      "sources": [
+        {
+          "path": "data_prep.py",
+          "line": 57,
+          "end_line": 58,
+          "label": "FOLD_BOUNDS"
+        },
+        {
+          "path": "data_prep.py",
+          "line": 229,
+          "end_line": 237,
+          "label": "get_folds / get_test"
+        }
+      ],
+      "width": 152
+    },
+    {
+      "id": "cv",
+      "lane": "model",
+      "col": 2,
+      "type": "messagebus",
+      "label": "Hyperparameter CV",
+      "sublabel": "เฉลี่ย R² บน 4 val fold",
+      "tag": "min-max fit ต่อ fold",
+      "sources": [
+        {
+          "path": "data_prep.py",
+          "line": 246,
+          "end_line": 252,
+          "label": "scale_fold"
+        },
+        {
+          "path": "sp500_top10_influence.ipynb",
+          "label": "section 5–10"
+        }
+      ],
+      "width": 152
+    },
+    {
+      "id": "fit",
+      "lane": "model",
+      "col": 3,
+      "type": "backend",
+      "label": "Fit บน train",
+      "sublabel": "Linear/Ridge/XGB/SVR",
+      "tag": "+ LSTM, AutoGluon",
+      "sources": [
+        {
+          "path": "sp500_top10_influence.ipynb",
+          "label": "section 6–10"
+        }
+      ],
+      "width": 148
+    },
+    {
+      "id": "test",
+      "lane": "model",
+      "col": 4,
+      "type": "backend",
+      "label": "วัดผลบน test",
+      "sublabel": "R² บน return · MAE/RMSE",
+      "tag": "AutoGluon R² 0.830",
+      "sources": [
+        {
+          "path": "sp500_top10_influence.ipynb",
+          "label": "section 11"
+        },
+        {
+          "path": "results_summary.csv",
+          "label": "ตาราง metric ทุก split"
+        }
+      ],
+      "width": 150
+    },
+    {
+      "id": "importance",
+      "lane": "model",
+      "col": 5,
+      "type": "backend",
+      "label": "Feature importance",
+      "sublabel": "permutation · SHAP",
+      "tag": "เด่นที่อันดับ 7–10",
+      "sources": [
+        {
+          "path": "sp500_top10_influence.ipynb",
+          "label": "section 12"
+        }
+      ],
+      "width": 150
+    },
+    {
+      "id": "bundle",
+      "lane": "deliver",
+      "col": 4,
+      "type": "database",
+      "label": "dashboard_data.pkl",
+      "sublabel": "metrics · preds · imp",
+      "tag": "section 16 + csv",
+      "sources": [
+        {
+          "path": "sp500_top10_influence.ipynb",
+          "label": "section 16 export"
+        },
+        {
+          "path": "dashboard.py",
+          "line": 19,
+          "end_line": 19,
+          "label": "DATA_PATH"
+        }
+      ],
+      "width": 150
+    },
+    {
+      "id": "dash",
+      "lane": "deliver",
+      "col": 5,
+      "type": "frontend",
+      "label": "Dashboard (7 หน้า)",
+      "sublabel": "streamlit run dashboard.py",
+      "tag": "อ่าน pkl + csv",
+      "sources": [
+        {
+          "path": "dashboard.py",
+          "line": 559,
+          "end_line": 574,
+          "label": "PAGES"
+        },
+        {
+          "path": "dashboard.py",
+          "line": 71,
+          "end_line": 80,
+          "label": "อ่าน csv ตรง"
+        }
+      ],
+      "width": 150
+    },
+    {
+      "id": "levelguard",
+      "lane": "checks",
+      "col": 0,
+      "type": "security",
+      "label": "ทำไมไม่ใช้ level",
+      "sublabel": "ADF p ≈ 0.98 · R² หลอก 0.99",
+      "tag": "section 2",
+      "sources": [
+        {
+          "path": "sp500_top10_influence.ipynb",
+          "label": "section 2"
+        }
+      ],
+      "width": 172
+    },
+    {
+      "id": "unswapqc",
+      "lane": "checks",
+      "col": 1,
+      "type": "security",
+      "label": "ตรวจคุณภาพ un-swap",
+      "sublabel": "corr 0.976 · R² −1.9 → 0.71",
+      "tag": "section 3, 3b",
+      "sources": [
+        {
+          "path": "sp500_top10_influence.ipynb",
+          "label": "section 3, 3b"
+        }
+      ],
+      "width": 168
+    },
+    {
+      "id": "ablation",
+      "lane": "checks",
+      "col": 3,
+      "type": "security",
+      "label": "Ablation scaler",
+      "sublabel": "none / z-score / min-max",
+      "tag": "section 10b",
+      "sources": [
+        {
+          "path": "sp500_top10_influence.ipynb",
+          "label": "section 10b"
+        }
+      ],
+      "width": 148
+    },
+    {
+      "id": "signif",
+      "lane": "checks",
+      "col": 4,
+      "type": "security",
+      "label": "มีนัยสำคัญไหม",
+      "sublabel": "bootstrap + Diebold–Mariano",
+      "tag": "section 11b",
+      "sources": [
+        {
+          "path": "sp500_top10_influence.ipynb",
+          "label": "section 11b"
+        }
+      ],
+      "width": 150
+    }
+  ],
+  "edges": [
+    {
+      "id": "csv-unswap",
+      "from": "csv",
+      "to": "unswap",
+      "variant": "emphasis"
+    },
+    {
+      "id": "csv-levelguard",
+      "from": "csv",
+      "to": "levelguard",
+      "label": "ทดสอบ level",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "id": "unswap-qc",
+      "from": "unswap",
+      "to": "unswapqc",
+      "label": "ตรวจคุณภาพ",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "id": "unswap-split",
+      "from": "unswap",
+      "to": "split",
+      "variant": "emphasis"
+    },
+    {
+      "id": "split-cv",
+      "from": "split",
+      "to": "cv",
+      "label": "4 fold",
+      "variant": "emphasis"
+    },
+    {
+      "id": "cv-ablation",
+      "from": "cv",
+      "to": "ablation",
+      "label": "scaler",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "id": "cv-fit",
+      "from": "cv",
+      "to": "fit",
+      "variant": "emphasis"
+    },
+    {
+      "id": "fit-test",
+      "from": "fit",
+      "to": "test",
+      "variant": "emphasis"
+    },
+    {
+      "id": "test-signif",
+      "from": "test",
+      "to": "signif",
+      "label": "มีนัยสำคัญ?",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "id": "test-importance",
+      "from": "test",
+      "to": "importance",
+      "variant": "default"
+    },
+    {
+      "id": "test-bundle",
+      "from": "test",
+      "to": "bundle",
+      "label": "export",
+      "variant": "default"
+    },
+    {
+      "id": "importance-bundle",
+      "from": "importance",
+      "to": "bundle",
+      "label": "ลง bundle",
+      "variant": "dashed",
+      "role": "branch"
+    },
+    {
+      "id": "bundle-dash",
+      "from": "bundle",
+      "to": "dash",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "กติกาที่ใช้เหมือนกันทุกโมเดล",
+      "items": [
+        "โมเดลทั้ง 6 ตัว: Linear · Ridge · XGBoost · SVR (RBF) · LSTM (PyTorch) · AutoGluon",
+        "min-max scaler fit บน train ของ split นั้นเท่านั้น แล้วค่อย transform val/test",
+        "hyperparameter ทุกตัวเลือกจาก CV 4 fold เท่านั้น — test 503 วันวัดครั้งเดียวตอนท้าย",
+        "R² คำนวณบน return; MAE/MSE/RMSE/MAPE คำนวณบนระดับดัชนี = ระดับเมื่อวาน × (1 + return ที่ทำนาย)",
+        "LSTM และ AutoGluon ใช้ส่วนท้ายของ train สำหรับ early stopping และ tuning"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "ทำไมต้อง un-swap และวัดแบบ same-day",
+      "items": [
+        "close_1..close_10 เป็นช่องอันดับที่เปลี่ยนตัวได้ ไม่ใช่หุ้นตัวเดิม ต้องจับคู่บริษัทก่อนคำนวณ return",
+        "un-swap = Hungarian assignment + rank penalty + market proxy + กฎหุ้นเข้า/ออกที่อันดับ 9–10",
+        "แถวแรก 4/1/2016 คำนวณ return ได้ด้วยแถวอ้างอิง 31/12/2015 จาก Yahoo Finance ที่ฝังไว้ใน REF_ROW",
+        "วัดอิทธิพล ไม่ใช่การพยากรณ์: ใช้ return เมื่อวานทำนายวันนี้ได้ R² ประมาณ 0",
+        "ข้อมูล ม.ค. 2016 – ธ.ค. 2025 รวม 2,514 วันซื้อขาย"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "ผลบน test (ธ.ค. 2023 – ธ.ค. 2025)",
+      "items": [
+        "R²: AutoGluon 0.830 · XGBoost 0.813 · SVR 0.798 · Ridge 0.773 · LSTM 0.769 · Linear 0.707",
+        "AutoGluon: MAE 17.9 จุด · RMSE 23.7 จุด · MAPE 0.308%",
+        "Top 10 อธิบาย return รายวันของดัชนีได้ราว 80% (CV 0.78–0.83 ทุกโมเดล)",
+        "Importance กระจุกที่อันดับ 7–10 จาก collinearity ในกลุ่มเทคและการเป็น proxy ของหุ้นอีก 490 ตัว",
+        "ข้อจำกัด: ไม่มี ticker และ market cap จึงตีความได้ระดับอันดับเท่านั้น"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "รายละเอียดการตรวจสอบ",
+      "items": [
+        "level ไม่ stationary (ADF p ≈ 0.98) ให้ R² 0.99 แบบ spurious และ tree model ได้ test R² = −4.1",
+        "คุณภาพ un-swap: corr ของคู่ราคาใกล้กัน 0.976 และ R² ก่อน/หลัง −1.9 → 0.71",
+        "ablation scaler (section 10b): Linear/XGBoost เท่ากันเป๊ะ, Ridge/SVR/LSTM ดีขึ้น +0.017/+0.024/+0.046",
+        "นัยสำคัญบน test: moving-block bootstrap + Diebold–Mariano (LSTM ไม่ต่างจาก Linear)",
+        "Dashboard 7 หน้า: ภาพรวม · เปรียบเทียบโมเดล · importance · อิทธิพลตามเวลา · ข้อมูลและ un-swap · hyperparameter search · วิธีการ"
+      ]
+    }
+  ]
+}
